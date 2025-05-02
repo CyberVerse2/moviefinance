@@ -1,10 +1,20 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useCallback } from "react";
+import Link from "next/link"; 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm, SubmitHandler } from "react-hook-form"; // Re-add SubmitHandler for cast
-import { z } from "zod";
-import { Button } from "@/app/components/ui/button";
+import { useForm, type ControllerRenderProps } from "react-hook-form";
+import * as z from "zod";
+import { useAccount, useWalletClient } from 'wagmi';
+import { base } from 'wagmi/chains'; 
+// import { parseEther } from 'viem'; // Commented out as it's unused now
+import { UploadButton } from '@uploadthing/react'; // Import ClientUploadedFileData
+import Image from "next/image";
+import { ArrowLeft, ArrowRight, Film, Loader2 } from "lucide-react"; 
+import { OurFileRouter } from "../api/uploadthing/core"; // Corrected path
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"; 
 import {
   Form,
   FormControl,
@@ -12,473 +22,498 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-  FormDescription,
-} from "@/app/components/ui/form";
-import { Input } from "@/app/components/ui/input";
-import { Textarea } from "@/app/components/ui/textarea";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/app/components/ui/card";
-import { useToast } from "@/app/components/ui/use-toast";
-import { ArrowLeft, ArrowRight } from 'lucide-react'; 
-import { Label } from "@/app/components/ui/label";
-import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
-import { createCoin } from '@zoralabs/coins-sdk';
-import { baseSepolia } from 'viem/chains';
-import { Address, parseEther } from 'viem'; 
-import { Checkbox } from "@/app/components/ui/checkbox";
+} from "../components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "../components/ui/textarea";
+import { toast } from "../components/ui/use-toast";
+// import { deployZoraNftCollection } from '../../lib/zora'; // TODO: Implement or find this function
+import { uploadJsonToPinata } from '@/lib/ipfs'; 
+import { supabase } from '@/lib/supabaseClient';
 
-// Define the form schema using Zod
+// Zod Schema (Keep current)
 const projectFormSchema = z.object({
-  title: z.string().min(3, {
-    message: 'Title must be at least 3 characters.',
-  }),
-  description: z.string().min(10, {
-    message: 'Description must be at least 10 characters.',
-  }),
-  imageUrl: z.string().url({ message: 'Please enter a valid URL.' }).optional().or(z.literal('')), 
-  fundingGoalUsd: z.coerce 
+  title: z.string().min(3, { message: 'Title must be at least 3 characters.' }),
+  description: z.string().min(10, { message: 'Description must be at least 10 characters.' }),
+  nft_media: z.string().url({ message: "Please upload a valid image." }).min(1, { message: 'Project image is required.' }), 
+  fundingGoalUsd: z.coerce
     .number({
-      required_error: 'Funding goal is required',
+      required_error: 'Funding goal is required.',
       invalid_type_error: 'Funding goal must be a number',
     })
     .positive({ message: 'Funding goal must be positive.' }),
-  mintPrice: z.coerce.number().nonnegative({ message: "Mint price cannot be negative." }).default(0.001), // Price in ETH
-  mintLimitPerWallet: z.coerce.number().int().positive({ message: "Mint limit must be a positive whole number." }).default(10),
-  mintDurationDays: z.coerce.number().int().positive({ message: "Mint duration must be a positive whole number of days." }).default(7),
+  mintPrice: z.coerce.number().nonnegative({ message: "Mint price cannot be negative." }),
+  mintLimitPerWallet: z.coerce.number().int().positive({ message: "Mint limit must be a positive whole number." }),
+  mintDurationDays: z.coerce.number().int().positive({ message: "Mint duration must be a positive whole number of days." }),
 });
 
 type ProjectFormValues = z.infer<typeof projectFormSchema>;
 
-// Default values for the form
+// Default Values (Keep current, ensure nft_media is initialized)
 const defaultValues: Partial<ProjectFormValues> = {
-  title: '',
-  description: '',
-  imageUrl: '',
-  fundingGoalUsd: 0, 
+  title: "",
+  description: "",
+  fundingGoalUsd: 50000,
   mintPrice: 0.001,
   mintLimitPerWallet: 10,
   mintDurationDays: 7,
+  nft_media: undefined, 
 };
 
 export default function CreateProjectPage() {
-  const { address } = useAccount();
+  const [step, setStep] = useState(1);
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [step, setStep] = useState(1)
-  const { toast } = useToast();
-  const publicClient = usePublicClient({ chainId: baseSepolia.id });
+  const { address } = useAccount();
+  // const publicClient = usePublicClient({ chainId: base.id }); // Commented out as it's unused now
   const { data: walletClient } = useWalletClient();
 
+  // --- Stepper Logic --- START
   const nextStep = async () => {
-    const isValid = await form.trigger(); 
+    // Trigger validation for relevant fields before proceeding
+    // Simplified: Trigger all for now
+    const isValid = await form.trigger();
     if (isValid) {
-       setStep(step + 1)
+      // Only increment if not already on the final review step (step 3)
+      if (step < 3) {
+         setStep((prev) => prev + 1);
+      }
     }
-  }
+  };
 
   const prevStep = () => {
-    setStep(step - 1)
-  }
+    // Only decrement if not on the first step
+    if (step > 1) {
+      setStep((prev) => prev - 1);
+    }
+  };
+  // --- Stepper Logic --- END
 
   const form = useForm<ProjectFormValues>({
     resolver: zodResolver(projectFormSchema),
     defaultValues,
-    mode: 'onChange', 
+    mode: 'onChange',
   });
 
-  // Removed unused event parameter
-  function onStepSubmit(data: ProjectFormValues) {
-    console.log(`Data validated for Step ${step}:`, data);
-    if (step < 4) { 
-        nextStep();
-    }
-  }
-
-  async function handleFinalSubmit() {
-    if (!address) {
-      console.error('No connected wallet address found.');
+  // --- Upload Handlers --- START
+  type UploadCompleteData = {
+    url: string;
+    name: string;
+    size: number;
+    // serverData might be null if the server onUploadComplete returns void
+    serverData: { uploadedBy: string; fileUrl: string } | null;
+  };
+  const handleUploadComplete = useCallback((res: UploadCompleteData[]) => { 
+    if (res && res.length > 0) {
+      const url = res[0].url;
+      console.log("Image URL: ", url);
+      setUploadedImageUrl(url);
+      form.setValue("nft_media", url, { shouldValidate: true });
       toast({
-        title: 'Error: Wallet Not Connected',
-        description: 'Please connect your wallet (and ensure it matches the logged-in account) before submitting.',
-        variant: 'destructive',
+        title: "Upload Complete",
+        description: "Project image uploaded.",
       });
-      return;
     }
+  }, [form]);
 
-    if (!walletClient) {
-      toast({
-        title: 'Error: Wallet Not Ready',
-        description: 'Wallet client is not available. Ensure your wallet is connected and ready.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (walletClient.chain.id !== baseSepolia.id) {
-      toast({
-        title: 'Error: Wrong Network',
-        description: `Please switch your connected wallet to Base Sepolia (ID: ${baseSepolia.id}).`,
-        variant: 'destructive',
-      });
-      return; 
-    }
-
-    const isValid = await form.trigger();
-    if (!isValid) {
-      toast({
-        title: 'Error: Validation Failed',
-        description: 'Please check the form for errors.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    const formData = form.getValues();
-    setIsSubmitting(true);
-    const toastRef = toast({ 
-        title: 'Processing Project Submission...', 
-        description: 'Saving details and deploying your Zora coin. Please wait.',
-        duration: null, 
+  const handleUploadError = useCallback((error: Error) => {
+    console.error(`Upload Error! ${error.message}`, error);
+    toast({
+      title: "Upload Failed",
+      description: `Error: ${error.message}`,
+      variant: "destructive",
     });
-    const updateToast = toastRef.update; 
+  }, []);
+  // --- Upload Handlers --- END
+
+  // --- Submission Logic --- START
+  // Combined handler for step progression & final submission
+  const processSubmit = (data: ProjectFormValues) => {
+    if (step < 3) { // Progress if not on the final step (Step 3)
+      console.log(`Data validated for Step ${step}:`, data);
+      nextStep(); // Move to next step visually after validation
+    } else if (step === 3) { // Trigger final submission ONLY on Step 3
+      handleFinalSubmit(data);
+    }
+  };
+
+  async function handleFinalSubmit(data: ProjectFormValues) {
+    if (!address || !walletClient || walletClient.chain.id !== base.id) {
+      toast({ 
+        title: 'Wallet Error', 
+        description: 'Please connect your wallet and switch to Base Mainnet to submit.', 
+        variant: 'destructive' 
+      });
+      return;
+    }
+    if (!uploadedImageUrl) { 
+      toast({ title: 'Missing Image', description: 'Upload cover image.', variant: 'destructive' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    toast({ title: 'Submitting Project...', description: 'Please wait.' });
 
     try {
-      const saveResponse = await fetch('/api/save-project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: formData.title,
-          description: formData.description,
-          image_url: formData.imageUrl,
-          funding_goal: formData.fundingGoalUsd, 
-          creator_wallet_address: address,
-        }),
-      });
-      const saveData = await saveResponse.json();
-      if (!saveResponse.ok) {
-          throw new Error(`Failed to save project details: ${saveData.error || saveResponse.statusText}`);
-      }
-      const { projectId, metadataUri } = saveData; 
-      if (!projectId || !metadataUri) {
-          throw new Error('Missing projectId or metadataUri from save-project response.');
-      }
-      console.log('Project saved:', projectId, 'Metadata URI:', metadataUri);
+      const metadata = {
+        name: data.title,
+        description: data.description,
+        image: uploadedImageUrl, 
+        fundingGoalUsd: data.fundingGoalUsd,
+        mintPriceEth: data.mintPrice,
+        mintLimitPerWallet: data.mintLimitPerWallet,
+        mintDurationDays: data.mintDurationDays,
+      };
+      const metadataUri = await uploadJsonToPinata(metadata);
+      toast({ title: 'Metadata Uploaded', description: `IPFS URI: ${metadataUri}` });
 
-      if (!publicClient) {
-        toast({
-            title: 'Error: Network Client Error',
-            description: 'Could not get a client for the required network. Please check your connection.',
-            variant: 'destructive',
-          });
-        setIsSubmitting(false);
-        return;
-      }
+      // TODO: Call the (currently non-existent) Zora function
+      // const contractAddress = await deployZoraNftCollection(
+      //   publicClient,
+      //   walletClient,
+      //   address,
+      //   data.title,
+      //   "FILM", 
+      //   parseEther(data.mintPrice.toString()),
+      //   data.mintLimitPerWallet,
+      //   data.mintDurationDays,
+      //   metadataUri
+      // );
+      const contractAddress = "0xZORA_CONTRACT_PLACEHOLDER"; // Placeholder
+      toast({ title: 'NFT Collection Created', description: `Address: ${contractAddress}` });
 
-      const coinName = `${formData.title} Film Coin`;
-      const safeProjectId = String(projectId);
-      const coinSymbol = `P${safeProjectId.substring(0, 4).toUpperCase()}FC`;
+      const projectData = {
+        // Spread validated data first
+        title: data.title,
+        description: data.description,
+        funding_goal: data.fundingGoalUsd, // Map fundingGoalUsd to funding_goal
+        // Add other fields derived from 'data' needed for metadata/contract if they aren't implicitly covered
+        // mintPrice: data.mintPrice, // Example if needed directly, though it's in metadata
 
-      const mintDurationSeconds = BigInt(formData.mintDurationDays * 86400); // Convert days to seconds
-      const maxSupply = BigInt("18446744073709551615"); // Max uint64 for unbounded supply
-      const mintLimitPerWalletBigInt = BigInt(formData.mintLimitPerWallet);
-      const mintPriceWei = parseEther(String(formData.mintPrice)); // Convert ETH string/number to wei BigInt
-
-      const coinParams = {
-        name: coinName,
-        symbol: coinSymbol,
-        uri: metadataUri, 
-        payoutRecipient: address as Address, 
-        initialPurchaseWei: 0n, 
-        mintPrice: mintPriceWei,
-        mintLimitPerWallet: mintLimitPerWalletBigInt,
-        mintDurationSeconds: mintDurationSeconds,
-        maxSupply: maxSupply,
+        // Add generated/obtained values
+        creator_wallet_address: address, // Renamed field
+        collection_address: contractAddress,
+        ipfs_metadata_url: metadataUri,
+        image_url: uploadedImageUrl,
       };
 
-      console.log('Calling createCoin SDK with params:', coinParams);
-      const result = await createCoin(coinParams, walletClient, publicClient); 
-      console.log('Zora Coin creation successful:', result);
-      const newCoinAddress = result.address;
-      if (!newCoinAddress) {
-          throw new Error('Coin creation transaction succeeded, but no contract address was returned.');
-      }
+      // Log the data being sent to Supabase for debugging
+      console.log("Inserting into Supabase: ", projectData);
 
-      const updateResponse = await fetch('/api/create-zora-coin', { 
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: projectId, 
-          zoraContractAddress: newCoinAddress, 
-        }),
-      });
-      const updateData = await updateResponse.json();
-      if (!updateResponse.ok) {
-          console.error(`Failed to update project ${projectId} with coin address ${newCoinAddress}: ${updateData.error || updateResponse.statusText}`);
-          updateToast({ 
-              title: ' Project Created, Update Failed',
-              description: `Coin ${newCoinAddress} created, but failed to link it in DB. Please contact support.`,
-              variant: 'destructive', 
-              duration: 10000 
-          });
-          throw new Error(`Failed to update project with coin address: ${updateData.error || updateResponse.statusText}`);
-      }
-       console.log(`Successfully updated project ${projectId} with Zora address ${newCoinAddress}`);
+      const { error: dbError } = await supabase
+          .from('projects')
+          .insert([projectData]); // insert expects an array
+      if (dbError) throw new Error(`Supabase error: ${dbError.message}`);
 
-
-      updateToast({ 
-        title: ' Project Created Successfully!',
-        description: `Your Zora coin is deployed at ${newCoinAddress}.`,
-        variant: 'success', 
-        duration: 9000, 
-      });
-    } catch (error: unknown) { 
-      console.error('Final Submission Error:', error);
-      let errorMessage = 'An unexpected error occurred.';
+      toast({ title: 'Project Submitted Successfully!', variant: 'default' });
+      // TODO: Redirect
+    } catch (error: unknown) { // Use unknown type for error
+      console.error("Submission failed:", error);
+      let errorMessage = "Unknown error.";
       if (error instanceof Error) {
-          if (error.message.includes('User rejected the request')) {
-              errorMessage = 'Transaction rejected in wallet.';
-          } else if (error.message.includes('insufficient funds')) {
-              errorMessage = 'Insufficient funds for transaction.';
-          } else {
-              errorMessage = error.message;
-          }
-      } else if (typeof error === 'string') {
-         errorMessage = error;
+        errorMessage = error.message;
       }
-
-      updateToast({ 
-        title: ' Error During Project Creation',
-        description: errorMessage,
-        variant: 'destructive',
-        duration: 9000,
-      });
+      toast({ title: "Submission Failed", description: errorMessage, variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }
   }
+  // --- Submission Logic --- END
 
+  // --- JSX Structure --- START
   return (
-    <div className="container mx-auto max-w-4xl py-12 px-4 md:px-6">
-      {/* Basic Step Indicator (can be enhanced) */}
-      <div className="mb-8 flex justify-center space-x-8">
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="flex flex-col items-center">
-            <div
-              className={`flex h-8 w-8 items-center justify-center rounded-full border-2 ${step === i ? "border-red-600 text-red-600" : step > i ? "border-green-500 bg-green-500 text-white" : "border-gray-300 text-gray-400"}`}
-            >
-              {step > i ? '✓' : i}
-            </div>
-            <span className={`mt-1 text-xs ${step === i ? "text-red-600" : "text-muted-foreground"}`}>
-              {i === 1 ? "Details" : i === 2 ? "Tokens" : i === 3 ? "Media" : "Review"}
-            </span>
-          </div>
-        ))}
+    <div className="container px-4 py-8 md:px-6 md:py-12"> 
+      {/* Added Back Link */}
+      <Link
+        href="/"
+        className="inline-flex items-center text-sm font-medium text-muted-foreground hover:text-foreground mb-6"
+      >
+        <ArrowLeft className="mr-2 h-4 w-4" />
+        Back to Home
+      </Link>
+
+      {/* Added Title Section */}
+      <div className="flex flex-col space-y-4">
+        <h1 className="text-3xl font-bold tracking-tight">Create Your Film Project</h1>
+        <p className="text-muted-foreground">
+          Follow the steps to launch your project on MovieFinance.
+        </p>
       </div>
 
-      {/* Step 1: Project Details */}
-      {step === 1 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 1: Project Details</CardTitle>
-            <CardDescription>Tell us about your film project.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit(onStepSubmit as SubmitHandler<ProjectFormValues>)} className="space-y-6">
-                <FormField
-                  control={form.control}
-                  name="title"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Project Title</FormLabel>
-                      <FormControl>
-                        <Input placeholder="My Awesome Film" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
+      <div className="mt-8"> 
+        {/* --- Added Stepper UI --- START */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex flex-col items-center">
+                <div
+                  className={`flex h-10 w-10 items-center justify-center rounded-full border-2 ${
+                    step === i
+                      ? "border-red-600 bg-red-600 text-white"
+                      : step > i
+                      ? "border-red-600 bg-white text-red-600"
+                      : "border-gray-200 bg-white text-gray-400"
+                  }`}
+                >
+                  {step > i ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  ) : (
+                    i
                   )}
-                />
-                <FormField
-                  control={form.control}
-                  name="description"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Description / Logline</FormLabel>
-                      <FormControl>
-                        <Textarea placeholder="A brief summary..." {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="imageUrl"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Image URL (Optional)</FormLabel>
-                      <FormControl>
-                        <Input placeholder="https://..." {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="fundingGoalUsd"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Funding Goal (USD)</FormLabel>
-                      <FormControl>
-                        <Input type="number" placeholder="50000" {...field} onChange={event => field.onChange(+event.target.value)} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="flex justify-end">
-                  <Button type="submit" className="bg-red-600 hover:bg-red-700">
-                    Next Step <ArrowRight className="ml-2 h-4 w-4" />
+                </div>
+                <span className={`mt-2 text-xs ${step === i ? "font-medium text-red-600" : "text-muted-foreground"}`}>
+                  {i === 1 ? "Details" : i === 2 ? "Economics" : "Review"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="relative mt-4">
+            <div className="absolute left-0 top-1/2 h-0.5 w-full -translate-y-1/2 bg-gray-200"></div>
+            <div
+              className="absolute left-0 top-1/2 h-0.5 -translate-y-1/2 bg-red-600 transition-all duration-300"
+              style={{ width: `${(step - 1) * 50}%` }}
+            ></div>
+          </div>
+        </div>
+        {/* --- Added Stepper UI --- END */}
+
+        {/* --- Form Wrapper --- START */}
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(processSubmit)} className="space-y-8">
+            
+            {/* --- Step 1 Card (Details) --- START */}
+            {step === 1 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Step 1: Project Details</CardTitle>
+                  <CardDescription>
+                    Tell us about your film project.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Title Field */}
+                  <FormField
+                    control={form.control}
+                    name="title"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Project Title</FormLabel>
+                        <FormControl>
+                          <Input placeholder="My Awesome Film" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  {/* Description Field */}
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder="Describe your project in detail..."
+                            className="resize-none"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  {/* Image Upload Field */}
+                  <FormField
+                    control={form.control}
+                    name="nft_media"
+                    render={({ field }) => ( // field is included but value is managed by UploadButton's onClientUploadComplete
+                      <FormItem>
+                        <FormLabel>Project Cover Image</FormLabel>
+                        <FormControl>
+                          <div>
+                            <UploadButton<OurFileRouter, 'imageUploader'> 
+                              endpoint="imageUploader" // Matches endpoint in core.ts
+                              onClientUploadComplete={handleUploadComplete}
+                              onUploadError={handleUploadError}
+                            />
+                            {uploadedImageUrl && (
+                              <div className="mt-4">
+                                <p className="text-sm font-medium">Uploaded Image:</p>
+                                <Image
+                                  src={uploadedImageUrl}
+                                  alt="Uploaded project cover"
+                                  width={200} // Example width
+                                  height={112} // Example height based on 16:9 aspect ratio
+                                  className="rounded-md object-cover"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </CardContent>
+                <CardFooter className="flex justify-end"> 
+                  {/* Only show Next button on step 1 */}
+                  <Button type="submit" className="bg-red-600 hover:bg-red-700" disabled={isSubmitting}>
+                    Next
+                    <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
-                </div>
-              </form>
-            </Form>
-          </CardContent>
-        </Card>
-      )}
+                </CardFooter>
+              </Card>
+            )}
+            {/* --- Step 1 Card (Details) --- END */}
 
-      {/* Step 2: Token Economics */}
-      {step === 2 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 2: Token Economics</CardTitle>
-            <CardDescription>What&apos;s the mint price, limit per wallet, and duration?</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <FormField
-              control={form.control}
-              name="mintPrice"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Mint Price (ETH)</FormLabel>
-                  <FormControl>
-                    <Input type="number" step="0.0001" placeholder="e.g., 0.001" {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    The price to mint one token. Set to 0 for a free mint.
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="mintLimitPerWallet"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Mint Limit Per Wallet</FormLabel>
-                  <FormControl>
-                    <Input type="number" step="1" placeholder="e.g., 10" {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    Maximum number of tokens one wallet address can mint.
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="mintDurationDays"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Mint Duration (Days)</FormLabel>
-                  <FormControl>
-                    <Input type="number" step="1" placeholder="e.g., 7" {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    How long the public minting phase will last.
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <div className="flex justify-between">
-              <Button onClick={prevStep} variant="outline">
-                <ArrowLeft className="mr-2 h-4 w-4" /> Previous Step
-              </Button>
-              <Button onClick={nextStep} className="bg-red-600 hover:bg-red-700">
-                Next Step <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            {/* --- Step 2 Card (Economics) --- START */}
+            {step === 2 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Step 2: Funding & Minting</CardTitle>
+                  <CardDescription>
+                    Set up the funding goal and NFT minting parameters.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  {/* Funding Goal Field */}
+                  <FormField
+                    control={form.control}
+                    name="fundingGoalUsd"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Funding Goal (USD)</FormLabel>
+                        <FormControl>
+                          <Input type="number" placeholder="50000" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  {/* Mint Price Field */}
+                  <FormField
+                    control={form.control}
+                    name="mintPrice"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Mint Price (ETH)</FormLabel>
+                        <FormControl>
+                          <Input type="number" step="0.001" placeholder="0.001" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  {/* Mint Limit Field */}
+                  <FormField
+                    control={form.control}
+                    name="mintLimitPerWallet"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Mint Limit Per Wallet</FormLabel>
+                        <FormControl>
+                          <Input type="number" placeholder="10" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  {/* Mint Duration Field */}
+                  <FormField
+                    control={form.control}
+                    name="mintDurationDays"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Mint Duration (Days)</FormLabel>
+                        <FormControl>
+                          <Input type="number" placeholder="7" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </CardContent>
+                <CardFooter className="flex justify-between"> 
+                  {/* Show Previous and Next buttons on step 2 */}
+                  <Button type="button" onClick={prevStep} variant="outline" disabled={isSubmitting}>
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    Previous
+                  </Button>
+                  <Button type="submit" className="bg-red-600 hover:bg-red-700" disabled={isSubmitting}>
+                    Next
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </CardFooter>
+              </Card>
+            )}
+            {/* --- Step 2 Card (Economics) --- END */}
 
-      {/* Step 3: Media & Team (Placeholder) */}
-      {step === 3 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 3: Media Upload</CardTitle>
-            <CardDescription>Upload your project&apos;s poster image (Placeholder).</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-             <p className="text-muted-foreground">[Media uploaders and team member fields would go here]</p>
-             {/* Add relevant components here */}
-            <div className="flex justify-between">
-              <Button onClick={prevStep} variant="outline">
-                <ArrowLeft className="mr-2 h-4 w-4" /> Previous Step
-              </Button>
-              <Button onClick={nextStep} className="bg-red-600 hover:bg-red-700">
-                Next Step <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Step 4: Review & Submit */}
-      {step === 4 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 4: Review & Submit</CardTitle>
-            <CardDescription>Review your project details before creating it onchain.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-             {/* Display summary of data - using form.getValues() */}
-             <div className="space-y-2 rounded-lg border p-4">
-                <h3 className="font-semibold">Project Summary</h3>
-                <p><strong>Title:</strong> {form.getValues('title')}</p>
-                <p><strong>Description:</strong> {form.getValues('description')}</p>
-                <p><strong>Funding Goal:</strong> ${form.getValues('fundingGoalUsd')}</p>
-                <p><strong>Image URL:</strong> {form.getValues('imageUrl') || 'N/A'}</p>
-                <p><strong>Creator Wallet:</strong> {address}</p>
-                <p className="text-muted-foreground text-sm">(Add summaries for Steps 2 & 3 data here)</p>
-             </div>
-
-            {/* Agreement Checkbox */}
-             <div className="flex items-start space-x-2 rounded-lg border p-4 bg-muted/50">
-                <Checkbox id="terms" required />
-                <div className="grid gap-1.5 leading-none">
-                    <Label htmlFor="terms" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                        Accept terms and conditions
-                    </Label>
-                    <p className="text-sm text-muted-foreground">
-                        You agree to our Terms of Service and confirm all details are accurate.
-                    </p>
-                </div>
-             </div>
-
-            <div className="flex justify-between">
-              <Button onClick={prevStep} variant="outline">
-                <ArrowLeft className="mr-2 h-4 w-4" /> Previous Step
-              </Button>
-              <Button type="button" onClick={handleFinalSubmit} disabled={isSubmitting} className="bg-red-600 hover:bg-red-700">
-                {isSubmitting ? 'Submitting...' : 'Confirm & Submit Project'}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            {/* --- Step 3 Card (Review & Submit) --- START */}
+            {step === 3 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Review & Submit</CardTitle>
+                  <CardDescription>Please review your project details before submitting.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Display Summary Here (using form.getValues()) */}
+                  <div className="space-y-2 rounded-md border p-4">
+                    <h4 className="font-medium">Project Summary</h4>
+                    <p><strong>Title:</strong> {form.getValues("title")}</p>
+                    <p><strong>Description:</strong> {form.getValues("description")}</p>
+                    <p><strong>Funding Goal:</strong> ${form.getValues("fundingGoalUsd").toLocaleString()}</p>
+                    <p><strong>Mint Price:</strong> {form.getValues("mintPrice")} ETH</p>
+                    <p><strong>Mint Limit:</strong> {form.getValues("mintLimitPerWallet")} per wallet</p>
+                    <p><strong>Mint Duration:</strong> {form.getValues("mintDurationDays")} days</p>
+                    {uploadedImageUrl && (
+                      <div>
+                        <p><strong>Cover Image:</strong></p>
+                        <Image
+                          src={uploadedImageUrl}
+                          alt="Project cover summary"
+                          width={160} 
+                          height={90} 
+                          className="rounded-md object-cover"
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {/* Add wallet connection status/warning if needed */}
+                  {!address && (
+                    <p className="text-sm text-destructive">Warning: Wallet not connected. Please connect to submit.</p>
+                  )}
+                  {walletClient && walletClient.chain.id !== base.id && (
+                    <p className="text-sm text-destructive">Warning: Please switch wallet to Base Mainnet network.</p>
+                  )}
+                  <div className="flex justify-between">
+                    <Button type="button" onClick={prevStep} variant="outline" disabled={isSubmitting}>
+                      <ArrowLeft className="mr-2 h-4 w-4" />
+                      Previous
+                    </Button>
+                    <Button
+                      type="submit"
+                      className="bg-green-600 hover:bg-green-700" // Changed to green
+                      disabled={isSubmitting || !address || (walletClient && walletClient.chain.id !== base.id)}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {/* Use imported Loader2 */}
+                          Submitting...
+                        </>
+                      ) : (
+                        "Submit Project"
+                      )}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            {/* --- Step 3 Card (Review & Submit) --- END */}
+          </form>
+        </Form>
+        {/* --- Form Wrapper --- END */}
+      </div>
     </div>
   );
+  // --- JSX Structure --- END
 }

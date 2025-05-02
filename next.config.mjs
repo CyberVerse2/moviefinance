@@ -11,13 +11,14 @@ const nextConfig = {
     dangerouslyAllowSVG: true, // Allows loading SVGs
     contentDispositionType: 'attachment', // Recommended security setting
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;", // Recommended security setting
-    // If you load images from external domains later, add them here:
-    // remotePatterns: [
-    //   {
-    //     protocol: 'https',
-    //     hostname: 'example.com',
-    //   },
-    // ],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'utfs.io',
+        port: '',
+        pathname: '/f/**', // Allow any path starting with /f/
+      },
+    ],
   },
 };
 
