@@ -1,21 +1,10 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { base } from "wagmi/chains";
-import { MiniKitProvider, useMiniKit } from "@coinbase/onchainkit/minikit";
+import { MiniKitProvider } from "@coinbase/onchainkit/minikit";
 
 export function Providers(props: { children: ReactNode }) {
-  const {
-    setFrameReady,
-    isFrameReady,
-  } = useMiniKit();
-
-  // Call setFrameReady() when your app is ready to be shown
-  useEffect(() => {
-    if (!isFrameReady) {
-      setFrameReady();
-    }
-  }, [isFrameReady, setFrameReady]);
   return (
     <MiniKitProvider
       apiKey={process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY}
