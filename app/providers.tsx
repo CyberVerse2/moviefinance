@@ -8,9 +8,6 @@ export function Providers(props: { children: ReactNode }) {
   const {
     setFrameReady,
     isFrameReady,
-    context,
-    updateClientContext,
-    notificationProxyUrl,
   } = useMiniKit();
 
   // Call setFrameReady() when your app is ready to be shown
