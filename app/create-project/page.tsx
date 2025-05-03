@@ -7,11 +7,11 @@ import { useForm, type ControllerRenderProps } from "react-hook-form";
 import * as z from "zod";
 import { useAccount, useWalletClient } from 'wagmi';
 import { base } from 'wagmi/chains'; 
-// import { parseEther } from 'viem'; // Commented out as it's unused now
-import { UploadButton } from '@uploadthing/react'; // Import ClientUploadedFileData
-import Image from "next/image";
-import { ArrowLeft, ArrowRight, Film, Loader2 } from "lucide-react"; 
-import { OurFileRouter } from "../api/uploadthing/core"; // Corrected path
+import { Address, createPublicClient, http } from 'viem'; // Added viem
+import { createCoin } from '@zoralabs/coins-sdk'; // Added Zora SDK
+import { toast } from "../components/ui/use-toast";
+import { supabase } from '@/lib/supabaseClient';
+import { uploadJsonToPinata, uploadFileToPinata } from '@/lib/ipfs'; // Import both functions
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"; 
@@ -22,19 +22,23 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  FormDescription,
 } from "../components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "../components/ui/textarea";
-import { toast } from "../components/ui/use-toast";
-// import { deployZoraNftCollection } from '../../lib/zora'; // TODO: Implement or find this function
-import { uploadJsonToPinata } from '@/lib/ipfs'; 
-import { supabase } from '@/lib/supabaseClient';
+import Image from "next/image";
+import { ArrowLeft, ArrowRight, Film, Loader2 } from "lucide-react"; 
+import { Label } from "@/components/ui/label"; // Import Label
+import { OurFileRouter } from "../api/uploadthing/core"; // Corrected path
 
 // Zod Schema (Keep current)
 const projectFormSchema = z.object({
   title: z.string().min(3, { message: 'Title must be at least 3 characters.' }),
+  symbol: z.string()
+    .min(3, { message: 'Symbol must be 3-5 characters.' })
+    .max(5, { message: 'Symbol must be 3-5 characters.' })
+    .regex(/^[A-Z0-9]+$/, { message: 'Symbol must be uppercase letters/numbers.'}),
   description: z.string().min(10, { message: 'Description must be at least 10 characters.' }),
-  nft_media: z.string().url({ message: "Please upload a valid image." }).min(1, { message: 'Project image is required.' }), 
   fundingGoalUsd: z.coerce
     .number({
       required_error: 'Funding goal is required.',
@@ -43,7 +47,7 @@ const projectFormSchema = z.object({
     .positive({ message: 'Funding goal must be positive.' }),
   mintPrice: z.coerce.number().nonnegative({ message: "Mint price cannot be negative." }),
   mintLimitPerWallet: z.coerce.number().int().positive({ message: "Mint limit must be a positive whole number." }),
-  mintDurationDays: z.coerce.number().int().positive({ message: "Mint duration must be a positive whole number of days." }),
+  mintDurationDays: z.coerce.number().int().positive({ message: 'Duration must be a positive number of days' }),
 });
 
 type ProjectFormValues = z.infer<typeof projectFormSchema>;
@@ -51,21 +55,27 @@ type ProjectFormValues = z.infer<typeof projectFormSchema>;
 // Default Values (Keep current, ensure nft_media is initialized)
 const defaultValues: Partial<ProjectFormValues> = {
   title: "",
+  symbol: "",
   description: "",
   fundingGoalUsd: 50000,
   mintPrice: 0.001,
   mintLimitPerWallet: 10,
   mintDurationDays: 7,
-  nft_media: undefined, 
 };
 
 export default function CreateProjectPage() {
   const [step, setStep] = useState(1);
+  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null); // State for the image file
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { address } = useAccount();
-  // const publicClient = usePublicClient({ chainId: base.id }); // Commented out as it's unused now
+  const { address: connectedAddress, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
+
+  // Define the public client for Base network (client-side)
+  const publicClient = createPublicClient({
+    chain: base,
+    transport: http('https://mainnet.base.org'), // Using public Base RPC
+  });
 
   // --- Stepper Logic --- START
   const nextStep = async () => {
@@ -94,36 +104,17 @@ export default function CreateProjectPage() {
     mode: 'onChange',
   });
 
-  // --- Upload Handlers --- START
-  type UploadCompleteData = {
-    url: string;
-    name: string;
-    size: number;
-    // serverData might be null if the server onUploadComplete returns void
-    serverData: { uploadedBy: string; fileUrl: string } | null;
-  };
-  const handleUploadComplete = useCallback((res: UploadCompleteData[]) => { 
-    if (res && res.length > 0) {
-      const url = res[0].url;
-      console.log("Image URL: ", url);
-      setUploadedImageUrl(url);
-      form.setValue("nft_media", url, { shouldValidate: true });
-      toast({
-        title: "Upload Complete",
-        description: "Project image uploaded.",
-      });
+  // Handler for file input change
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      const file = event.target.files[0];
+      console.log('File selected:', file.name);
+      setSelectedImageFile(file);
+    } else {
+      console.log('File selection cleared.');
+      setSelectedImageFile(null);
     }
-  }, [form]);
-
-  const handleUploadError = useCallback((error: Error) => {
-    console.error(`Upload Error! ${error.message}`, error);
-    toast({
-      title: "Upload Failed",
-      description: `Error: ${error.message}`,
-      variant: "destructive",
-    });
-  }, []);
-  // --- Upload Handlers --- END
+  };
 
   // --- Submission Logic --- START
   // Combined handler for step progression & final submission
@@ -137,83 +128,147 @@ export default function CreateProjectPage() {
   };
 
   async function handleFinalSubmit(data: ProjectFormValues) {
-    if (!address || !walletClient || walletClient.chain.id !== base.id) {
+    if (!isConnected || !connectedAddress || !walletClient) {
       toast({ 
+        variant: "destructive",
         title: 'Wallet Error', 
         description: 'Please connect your wallet and switch to Base Mainnet to submit.', 
-        variant: 'destructive' 
       });
       return;
     }
-    if (!uploadedImageUrl) { 
-      toast({ title: 'Missing Image', description: 'Upload cover image.', variant: 'destructive' });
+
+    // Validate that an image file has been selected
+    if (!selectedImageFile) {
+      toast({ 
+        variant: "destructive",
+        title: 'Missing Image', 
+        description: 'Please select a cover image file.', 
+      });
       return;
     }
 
     setIsSubmitting(true);
-    toast({ title: 'Submitting Project...', description: 'Please wait.' });
+    console.log("Final submission data:", data);
+    console.log("Selected image file:", selectedImageFile.name);
 
     try {
+      // --- 1. Create Project in Supabase (get project ID) --- //
+      console.log("Attempting Supabase insert with address:", connectedAddress);
+      const { data: projectData, error: insertError } = await supabase
+        .from('projects')
+        .insert({
+          // Map form data to Supabase columns
+          title: data.title,
+          description: data.description,
+          funding_goal: data.fundingGoalUsd,
+          creator_wallet_address: connectedAddress, // Correct column name
+          symbol: data.symbol,
+          // Add other fields as needed
+          // image_url: initially null or placeholder, will be IPFS hash
+        })
+        .select('id')
+        .single();
+
+      if (insertError) {
+        console.error("Supabase insert error:", insertError);
+        throw new Error(`Database error: ${insertError.message}`);
+      }
+      if (!projectData?.id) {
+        console.error("Supabase insert error: No project ID returned.");
+        throw new Error("Failed to create project record in database.");
+      }
+
+      console.log("Project created with ID:", projectData.id);
+      const projectId = projectData.id;
+
+      // --- 2. Upload Image File to Pinata --- //
+      toast({ description: 'Uploading image to IPFS...' });
+      const imageIpfsUri = await uploadFileToPinata(selectedImageFile);
+      console.log('Image uploaded to IPFS:', imageIpfsUri);
+      toast({ description: 'Image uploaded successfully!' });
+
+      // --- 3. Prepare and Pin Metadata (with correct image URI) to IPFS --- //    
       const metadata = {
         name: data.title,
         description: data.description,
-        image: uploadedImageUrl, 
-        fundingGoalUsd: data.fundingGoalUsd,
-        mintPriceEth: data.mintPrice,
-        mintLimitPerWallet: data.mintLimitPerWallet,
-        mintDurationDays: data.mintDurationDays,
+        image: imageIpfsUri, // Use the IPFS URI for the image
+        // Add other attributes as needed
       };
+      
+      toast({ description: 'Uploading metadata to IPFS...' });
       const metadataUri = await uploadJsonToPinata(metadata);
-      toast({ title: 'Metadata Uploaded', description: `IPFS URI: ${metadataUri}` });
+      console.log('Metadata pinned to IPFS:', metadataUri);
+      toast({ description: 'Metadata uploaded successfully!' });
 
-      // TODO: Call the (currently non-existent) Zora function
-      // const contractAddress = await deployZoraNftCollection(
-      //   publicClient,
-      //   walletClient,
-      //   address,
-      //   data.title,
-      //   "FILM", 
-      //   parseEther(data.mintPrice.toString()),
-      //   data.mintLimitPerWallet,
-      //   data.mintDurationDays,
-      //   metadataUri
-      // );
-      const contractAddress = "0xZORA_CONTRACT_PLACEHOLDER"; // Placeholder
-      toast({ title: 'NFT Collection Created', description: `Address: ${contractAddress}` });
-
-      const projectData = {
-        // Spread validated data first
-        title: data.title,
-        description: data.description,
-        funding_goal: data.fundingGoalUsd, // Map fundingGoalUsd to funding_goal
-        // Add other fields derived from 'data' needed for metadata/contract if they aren't implicitly covered
-        // mintPrice: data.mintPrice, // Example if needed directly, though it's in metadata
-
-        // Add generated/obtained values
-        creator_wallet_address: address, // Renamed field
-        collection_address: contractAddress,
-        ipfs_metadata_url: metadataUri,
-        image_url: uploadedImageUrl,
+      // --- 4. Create Zora Coin on Base network --- //
+      const coinParams = {
+        name: data.title,
+        symbol: data.symbol,
+        uri: metadataUri,
+        payoutRecipient: connectedAddress as Address, // User's connected wallet is the recipient
       };
 
-      // Log the data being sent to Supabase for debugging
-      console.log("Inserting into Supabase: ", projectData);
+      console.log('🚀 Attempting to create Zora Coin with params:', coinParams);
+      console.log('Using walletClient:', walletClient);
+      console.log('Using publicClient:', publicClient);
 
-      const { error: dbError } = await supabase
-          .from('projects')
-          .insert([projectData]); // insert expects an array
-      if (dbError) throw new Error(`Supabase error: ${dbError.message}`);
+      const result = await createCoin(
+        coinParams, 
+        walletClient, 
+        publicClient
+      );
 
-      toast({ title: 'Project Submitted Successfully!', variant: 'default' });
-      // TODO: Redirect
-    } catch (error: unknown) { // Use unknown type for error
+      console.log('✅ Zora Coin Creation Result:', result);
+      const coinAddress = result.address;
+
+      toast({ description: `Coin created: ${coinAddress}` });
+
+      // --- 5. Update Supabase with Zora Contract Address --- //
+      console.log(`Updating Supabase project ${projectId} with Zora address ${coinAddress}...`);
+      const { error: updateError } = await supabase
+        .from('projects')
+        .update({ zora_contract_address: coinAddress })
+        .eq('id', projectId)
+        .select();
+
+      if (updateError) {
+        console.error('🔴 Supabase Update Error after Zora deploy:', updateError);
+        // Note: Zora coin was created, but DB update failed. Might need manual reconciliation.
+        throw new Error(`Zora coin created (${coinAddress}), but failed to update project record: ${updateError.message}`);
+      }
+      console.log('✅ Supabase updated successfully.');
+
+      // --- 6. Final Success & Navigation --- //
+      toast({ description: 'Project and Zora coin created successfully!' });
+      // router.push(`/project/${projectId}`); // Redirect to project page
+
+    } catch (error: unknown) { 
       console.error("Submission failed:", error);
-      let errorMessage = "Unknown error.";
+      let errorMessage = 'An unexpected error occurred during submission.';
+
+      // Type check before accessing properties
       if (error instanceof Error) {
         errorMessage = error.message;
+        // Log the specific error during Zora creation if possible
+        if (errorMessage.includes('Zora') || errorMessage.includes('coin') || errorMessage.includes('transaction')) { // Heuristic check for Zora/wallet errors
+          console.error('🔴 Error details likely related to Zora/Wallet:', error);
+        }
+      } else {
+        // Handle cases where the caught item is not an Error object
+        console.error('🔴 Caught non-Error object:', error);
+        errorMessage = 'An unexpected non-error value was caught.';
       }
-      toast({ title: "Submission Failed", description: errorMessage, variant: "destructive" });
-    } finally {
+
+      // Display specific error messages based on the caught error
+      // (This part seems to have been overwritten/removed in previous edits, restoring basic structure)
+      // Consider enhancing this logic based on the error source (Supabase, Pinata, Zora)
+
+      toast({ // Correct error toast usage
+        variant: "destructive",
+        title: "Submission Error",
+        description: errorMessage,
+      });
+    } finally { 
       setIsSubmitting(false);
     }
   }
@@ -298,12 +353,31 @@ export default function CreateProjectPage() {
                       <FormItem>
                         <FormLabel>Project Title</FormLabel>
                         <FormControl>
-                          <Input placeholder="My Awesome Film" {...field} />
+                          <Input placeholder="My Awesome Film Project" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
+
+                  {/* Symbol Field */}
+                  <FormField
+                    control={form.control}
+                    name="symbol"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Coin Symbol</FormLabel>
+                        <FormControl>
+                          <Input placeholder="FILM" {...field} />
+                        </FormControl>
+                        <FormDescription>
+                          3-5 uppercase letters/numbers (e.g., FILM, MOVI3).
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
                   {/* Description Field */}
                   <FormField
                     control={form.control}
@@ -323,37 +397,24 @@ export default function CreateProjectPage() {
                     )}
                   />
                   {/* Image Upload Field */}
-                  <FormField
-                    control={form.control}
-                    name="nft_media"
-                    render={({ field }) => ( // field is included but value is managed by UploadButton's onClientUploadComplete
-                      <FormItem>
-                        <FormLabel>Project Cover Image</FormLabel>
-                        <FormControl>
-                          <div>
-                            <UploadButton<OurFileRouter, 'imageUploader'> 
-                              endpoint="imageUploader" // Matches endpoint in core.ts
-                              onClientUploadComplete={handleUploadComplete}
-                              onUploadError={handleUploadError}
-                            />
-                            {uploadedImageUrl && (
-                              <div className="mt-4">
-                                <p className="text-sm font-medium">Uploaded Image:</p>
-                                <Image
-                                  src={uploadedImageUrl}
-                                  alt="Uploaded project cover"
-                                  width={200} // Example width
-                                  height={112} // Example height based on 16:9 aspect ratio
-                                  className="rounded-md object-cover"
-                                />
-                              </div>
-                            )}
-                          </div>
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
+                  <div className="space-y-2">
+                    <Label htmlFor="cover-image">Cover Image</Label>
+                    <Input 
+                      id="cover-image"
+                      type="file" 
+                      accept="image/png, image/jpeg, image/gif, image/webp" 
+                      onChange={handleFileChange}
+                      className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100" // Example styling
+                    />
+                    {selectedImageFile && <p className="text-sm text-muted-foreground pt-1">Selected: {selectedImageFile.name}</p>}
+                    <p className="text-sm text-muted-foreground">
+                      Upload the main visual for your project (JPG, PNG, GIF).
+                    </p>
+                    {/* Manual validation message display */} 
+                    {!selectedImageFile && form.formState.isSubmitted && (
+                      <p className="text-sm font-medium text-destructive">Image is required.</p> 
                     )}
-                  />
+                  </div>
                 </CardContent>
                 <CardFooter className="flex justify-end"> 
                   {/* Only show Next button on step 1 */}
@@ -460,16 +521,17 @@ export default function CreateProjectPage() {
                   <div className="space-y-2 rounded-md border p-4">
                     <h4 className="font-medium">Project Summary</h4>
                     <p><strong>Title:</strong> {form.getValues("title")}</p>
+                    <p><strong>Symbol:</strong> {form.getValues("symbol")}</p>
                     <p><strong>Description:</strong> {form.getValues("description")}</p>
                     <p><strong>Funding Goal:</strong> ${form.getValues("fundingGoalUsd").toLocaleString()}</p>
                     <p><strong>Mint Price:</strong> {form.getValues("mintPrice")} ETH</p>
                     <p><strong>Mint Limit:</strong> {form.getValues("mintLimitPerWallet")} per wallet</p>
                     <p><strong>Mint Duration:</strong> {form.getValues("mintDurationDays")} days</p>
-                    {uploadedImageUrl && (
+                    {selectedImageFile && (
                       <div>
                         <p><strong>Cover Image:</strong></p>
                         <Image
-                          src={uploadedImageUrl}
+                          src={URL.createObjectURL(selectedImageFile)}
                           alt="Project cover summary"
                           width={160} 
                           height={90} 
@@ -479,7 +541,7 @@ export default function CreateProjectPage() {
                     )}
                   </div>
                   {/* Add wallet connection status/warning if needed */}
-                  {!address && (
+                  {!connectedAddress && (
                     <p className="text-sm text-destructive">Warning: Wallet not connected. Please connect to submit.</p>
                   )}
                   {walletClient && walletClient.chain.id !== base.id && (
@@ -493,7 +555,7 @@ export default function CreateProjectPage() {
                     <Button
                       type="submit"
                       className="bg-green-600 hover:bg-green-700" // Changed to green
-                      disabled={isSubmitting || !address || (walletClient && walletClient.chain.id !== base.id)}
+                      disabled={isSubmitting || !connectedAddress || (walletClient && walletClient.chain.id !== base.id)}
                     >
                       {isSubmitting ? (
                         <>

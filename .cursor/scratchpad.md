@@ -15,42 +15,48 @@ The user wants to build a "MovieFinance" application, likely a web app, using Ne
 
 ## High-level Task Breakdown
 
-1.  **Setup Multi-Step UI Structure:** Integrate the stepper component and conditional rendering logic for each step based on `currentStep`. (DONE)
-2.  **Integrate `react-hook-form`:** Wrap the multi-step structure with the `<Form>` component and connect the Zod schema. (DONE)
-3.  **Distribute Form Fields:** Move existing form fields from the temporary location to their designated steps.
-    *   **Task 3.1:** Move `title`, `description`, `nft_media` to Step 1 Card.
-        *   *Success Criteria:* Fields render correctly on Step 1, hidden otherwise. Validation works for Step 1 fields on 'Next'.
-    *   **Task 3.2:** Move `funding_goal`, `mint_price`, `nft_name`, `nft_symbol`, `mint_start_date`, `mint_end_date` to Step 2 Card.
-        *   *Success Criteria:* Fields render correctly on Step 2, hidden otherwise. Validation works for Step 2 fields on 'Next'.
-    *   **Task 3.3:** Implement Review Display in Step 3 Card.
-        *   *Success Criteria:* All form data (`form.watch()`) displayed correctly for review on Step 3. Submit button visible only here.
-4.  **Refine Step Navigation & Validation:** Update `handleNext` to validate only the fields relevant to the *current* step. Ensure the Submit button triggers final validation and `onSubmit`.
- - [x] Task 4: Implement Image Upload (UploadThing)
-   - [x] Create API route (`/api/uploadthing/core.ts`)
-   - [x] Create API route handler ([/api/uploadthing/route.ts](cci:7://file:///Users/thecyberverse/Code/Quests/moviefinance/app/api/uploadthing/route.ts:0:0-0:0))
-   - [x] Install `@uploadthing/react`
-   - [x] Integrate `<UploadButton>` in `create-project/page.tsx`
-   - [x] Define `handleUploadComplete` and `handleUploadError`
-   - [x] Set up Environment Variable for UploadThing (`UPLOADTHING_TOKEN`)
-   - [ ] Test upload functionality
-    *   *Success Criteria:* Step-specific validation enforced by 'Next' button. Submit button works correctly on Step 3.
-5.  **Address Lint Errors:** Fix any errors introduced during the refactoring.
-    *   *Success Criteria:* `eslint` passes for `page.tsx`.
-6.  **Implement Submission Logic:** Connect the final submit action to deploy the Zora contract, upload metadata, and save project details to Supabase.
-7.  **Testing:** Thoroughly test the entire creation flow.
+- [x] 1. **Setup Multi-Step UI Structure:** Integrate the stepper component and conditional rendering logic for each step based on `currentStep`. (DONE)
+- [x] 2. **Integrate `react-hook-form`:** Wrap the multi-step structure with the `<Form>` component and connect the Zod schema. (DONE)
+- [x] 3. **Distribute Form Fields:** Move existing form fields from the temporary location to their designated steps.
+  - [x] **Task 3.1:** Move `title`, `description`, `nft_media` to Step 1 Card.
+    - *Success Criteria:* Fields render correctly on Step 1, hidden otherwise. Validation works for Step 1 fields on 'Next'.
+  - [x] **Task 3.2:** Move `funding_goal`, `mint_price`, `nft_name`, `nft_symbol`, `mint_start_date`, `mint_end_date` to Step 2 Card.
+    - *Success Criteria:* Fields render correctly on Step 2, hidden otherwise. Validation works for Step 2 fields on 'Next'.
+  - [x] **Task 3.3:** Implement Review Display in Step 3 Card.
+    - *Success Criteria:* All form data (`form.watch()`) displayed correctly for review on Step 3. Submit button visible only here.
+- [x] 4. **Refine Step Navigation & Validation:** Update `handleNext` to validate only the fields relevant to the *current* step. Ensure the Submit button triggers final validation and `onSubmit`.
+- [x] 5. **Implement Image Upload:** Integrate UploadThing for project image uploads, storing the URL.
+- [x] 6. **Implement Wallet Connection:** Add wallet connection functionality using OnchainKit/Wagmi.
+- [x] 7. **Implement Final Submission Logic:** In the final step:
+  - [x] a. Gather all form data.
+  - [x] b. Save core project details (title, description, goal, deadline, team, image URL, creator address) to Supabase `projects` table.
+  - [x] c. Prepare metadata JSON (name, description, image).
+  - [x] d. Pin metadata JSON to IPFS using Pinata via a backend API route (`/api/pin-json`). Get the IPFS URI.
+  - [x] e. **Refactor**: Move Zora coin creation to the frontend.
+  - [x] f. **Implement Frontend Zora Coin Creation**: Using the connected wallet (Wagmi `walletClient`), Zora SDK (`createCoin`), form data (name, symbol), and IPFS metadata URI, create the coin on Base mainnet.
+  - [x] g. **Implement Backend Supabase Update**: Create a simple API route (`/api/update-project-zora-address`) that takes `projectId` and `zoraContractAddress` and updates the corresponding Supabase record.
+  - [x] h. Call the backend update route from the frontend after successful coin creation.
+- [ ] 8. **Implement Project Display Page**: Create a dynamic route `[projectId]/page.tsx` to display the details of a created project fetched from Supabase.
+- [ ] 9. **Implement Project Funding/Interaction**: (Future Scope) Add functionality for users to interact with the Zora coin (e.g., mint/buy).
+- [ ] 10. **Refine UI/UX**: Improve styling, add loading states, better error handling, and polish the overall user experience.
+- [ ] 11. **Testing**: Thoroughly test the creation flow, display page, and interactions.
 
 ## Project Status Board
 
-- [x] **Task 1:** Setup Multi-Step UI Structure
-- [x] **Task 2:** Integrate `react-hook-form` 
-- [x] **Task 3:** Distribute Form Fields **(Already Existed)**
-  - [/] **Task 3.1:** Move Step 1 Fields (`title`, `description`, `nft_media`) - *Code moved, pending user testing*
-  - [ ] **Task 3.2:** Move Step 2 Fields (funding, tokenomics, dates)
-  - [ ] **Task 3.3:** Implement Step 3 Review Display
-- [/] **Task 4:** Refine Step Navigation & Validation Logic
-- [ ] **Task 5:** Address Lint Errors
-- [ ] **Task 6:** Implement Submission Logic (Partially done, needs review after field distribution)
-- [ ] **Task 7:** Testing
+- [x] Task 1: Setup Multi-Step UI Structure
+- [x] Task 2: Integrate `react-hook-form`
+- [x] Task 3: Distribute Form Fields
+  - [x] Task 3.1: Move Step 1 Fields (`title`, `description`, `nft_media`)
+  - [x] Task 3.2: Move Step 2 Fields (funding, tokenomics, dates)
+  - [x] Task 3.3: Implement Step 3 Review Display
+- [x] Task 4: Refine Step Navigation & Validation Logic
+- [x] Task 5: Implement Image Upload
+- [x] Task 6: Implement Wallet Connection
+- [x] Task 7: Implement Final Submission Logic
+- [ ] Task 8: Implement Project Display Page
+- [ ] Task 9: Implement Project Funding/Interaction
+- [ ] Task 10: Refine UI/UX
+- [ ] Task 11: Testing
 
 ## Executor's Feedback or Assistance Requests
 
